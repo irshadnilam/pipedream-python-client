@@ -9,13 +9,14 @@ async def main():
     client_id = os.environ.get("PD_CLIENT_ID")
     client_secret = os.environ.get("PD_CLIENT_SECRET")
     project_id = os.environ.get("PD_PROJECT_ID")
-    external_user_id = "test-user-123" # Replace with a relevant user ID
+    external_user_id = "test-user-sdk-py-123" # Replace/generate relevant user ID
 
     if not client_id or not client_secret or not project_id:
         print("Please set PD_CLIENT_ID, PD_CLIENT_SECRET, and PD_PROJECT_ID environment variables.")
         return
 
     try:
+        # Note: environment parameter is required
         async with PipedreamClient(client_id, client_secret, project_id, environment="development") as client:
             print("Client created. Attempting to create connect token...")
             token_info = await client.create_connect_token(
@@ -27,15 +28,67 @@ async def main():
             print(f"  Expires At: {token_info['expires_at']}")
             print(f"  Connect Link URL: {token_info['connect_link_url']}")
 
-            print("\nAttempting to list accounts...")
-            accounts_response = await client.get_accounts(limit=5) # Get first 5 accounts
-            print(f"Successfully retrieved {len(accounts_response['data'])} accounts (out of {accounts_response['page_info']['total_count']} total):")
-            first_account_id = None
-            for account in accounts_response['data']:
-                print(f"  - Account ID: {account['id']}, App: {account['app']['name']}, External User: {account['external_id']}")
-                if first_account_id is None:
-                    first_account_id = account['id']
+            # --- NEW: Project Info Example ---
+            print("\nAttempting to get project info...")
+            try:
+                project_info = await client.get_project_info()
+                print(f"Successfully retrieved project info. Apps linked: {len(project_info.get('apps', []))}")
+                for app in project_info.get('apps', [])[:5]: # Show first 5 linked apps
+                    print(f"  - App: {app['name']} (Slug: {app['name_slug']})")
+            except PipedreamApiError as e:
+                print(f"Could not retrieve project info: {e}")
+            # --- End Project Info Example ---
 
+            # --- NEW: Apps Examples ---
+            print("\nAttempting to list available apps (limit 5)...")
+            try:
+                apps_response = await client.get_apps(limit=5, has_actions=True)
+                print(f"Successfully listed {len(apps_response['data'])} apps with actions:")
+                first_app_slug = None
+                for app in apps_response['data']:
+                    print(f"  - App: {app['name']} (Slug: {app['name_slug']})")
+                    if first_app_slug is None:
+                        first_app_slug = app['name_slug']
+
+                if first_app_slug:
+                    print(f"\nAttempting to get details for app: {first_app_slug}...")
+                    try:
+                        app_details_response = await client.get_app(first_app_slug)
+                        app_details = app_details_response['data']
+                        print(f"Successfully retrieved details for {app_details['name']}:")
+                        print(f"  Slug: {app_details['name_slug']}")
+                        print(f"  Auth Type: {app_details['auth_type']}")
+                        print(f"  Description: {app_details.get('description', '')[:100]}...")
+                    except PipedreamApiError as e:
+                        print(f"Could not retrieve details for app {first_app_slug}: {e}")
+            except PipedreamApiError as e:
+                print(f"Could not list apps: {e}")
+            # --- End Apps Examples ---
+
+            print("\nAttempting to list accounts with pagination...")
+            try:
+                page1 = await client.get_accounts(limit=2)
+                print(f"Page 1: Retrieved {len(page1['data'])} accounts (Total: {page1['page_info']['total_count']})")
+                for account in page1['data']:
+                    print(f"  - Account ID: {account['id']}, App: {account['app']['name']}")
+
+                next_page_cursor = page1['page_info'].get('end_cursor')
+                if next_page_cursor:
+                    print(f"\nAttempting to get next page using cursor: {next_page_cursor[:10]}...")
+                    page2 = await client.get_accounts(limit=2, after=next_page_cursor)
+                    print(f"Page 2: Retrieved {len(page2['data'])} accounts:")
+                    for account in page2['data']:
+                        print(f"  - Account ID: {account['id']}, App: {account['app']['name']}")
+                else:
+                     print("No next page cursor found.")
+
+            except PipedreamApiError as e:
+                print(f"Failed to list accounts with pagination: {e}")
+
+            # --- Existing examples adjusted --- #
+
+            # ... (get_account_by_id example remains the same) ...
+            first_account_id = page1['data'][0]['id'] if page1['data'] else None
             if first_account_id:
                 print(f"\nAttempting to retrieve details for account ID: {first_account_id}...")
                 try:
@@ -46,63 +99,26 @@ async def main():
                     print(f"  App Name: {account_details['app']['name']}")
                     print(f"  External ID: {account_details['external_id']}")
                     print(f"  Healthy: {account_details['healthy']}")
-                    # Optionally show credentials if include_credentials was True (but be careful!)
-                    # if 'credentials' in account_details and account_details['credentials']:
-                    #     print(f"  Credentials Present: Yes (not shown)")
                 except PipedreamApiError as e:
                     print(f"Could not retrieve details for account {first_account_id}: {e}")
             else:
-                print("\nSkipping get_account_by_id example as no accounts were listed.")
+                print("\nSkipping get_account_by_id example as no accounts were listed in first page.")
 
-            # Example for delete (Use with extreme caution! Maybe create a dummy account first)
-            # account_to_delete = "apn_..." # Replace with an actual ID you want to delete
-            # if account_to_delete:
-            #     print(f"\nAttempting to delete account ID: {account_to_delete}...")
-            #     try:
-            #         await client.delete_account(account_to_delete)
-            #         print(f"Successfully deleted account {account_to_delete}.")
-            #     except PipedreamApiError as e:
-            #         print(f"Failed to delete account {account_to_delete}: {e}")
-            # else:
-            #      print("\nSkipping delete_account example as no ID was specified.")
 
-            # Example for delete_accounts_by_app (Use with extreme caution!)
-            # app_to_clear = "slack" # Replace with an actual app ID or slug
-            # if app_to_clear:
-            #     print(f"\nAttempting to delete all accounts for app: {app_to_clear}...")
-            #     try:
-            #         await client.delete_accounts_by_app(app_to_clear)
-            #         print(f"Successfully deleted all accounts for app {app_to_clear}.")
-            #     except PipedreamApiError as e:
-            #         print(f"Failed to delete accounts for app {app_to_clear}: {e}")
-            # else:
-            #      print("\nSkipping delete_accounts_by_app example as no app was specified.")
-
-            # Example for delete_external_user (Use with extreme caution!)
-            # user_to_delete = "test-user-123" # Replace with an actual external user ID
-            # if user_to_delete:
-            #     print(f"\nAttempting to delete external user: {user_to_delete}...")
-            #     try:
-            #         await client.delete_external_user(user_to_delete)
-            #         print(f"Successfully deleted external user {user_to_delete}.")
-            #     except PipedreamApiError as e:
-            #         print(f"Failed to delete external user {user_to_delete}: {e}")
-            # else:
-            #      print("\nSkipping delete_external_user example as no user was specified.")
+            # ... (Delete examples remain commented out) ...
 
             print("\nAttempting to list components (actions for 'gitlab')...")
             try:
-                # Change component_type to 'triggers' if you want to test trigger deployment
                 component_type_to_list = "actions"
                 components_response = await client.get_components(
                     component_type=component_type_to_list,
-                    app_filter="gitlab", # Example: filter for gitlab actions
-                    search_query="issue", # Example: search for 'issue'
+                    app_filter="gitlab",
+                    search_query="issue",
                     limit=5
                 )
                 print(f"Successfully listed {len(components_response['data'])} components:")
                 first_component_key = None
-                component_type_used = component_type_to_list # Use the same type for get_component
+                component_type_used = component_type_to_list
                 for comp in components_response['data']:
                     print(f"  - Key: {comp['key']}, Name: {comp['name']}, Version: {comp['version']}")
                     if first_component_key is None:
@@ -189,18 +205,12 @@ async def main():
                         # --- End run_action Example --- #
 
                         # --- Example for deploy_trigger --- #
-                        # This uses gitlab-new-issue as an example
-                        # Requires valid Gitlab auth ID (apn) and project ID prop
-                        # Also requires a destination (webhook_url or workflow_id)
-                        # NOTE: This example assumes get_components listed TRIGGERS with key 'gitlab-new-issue'
-                        # Adjust the get_components call above if needed.
-                        if component_type_used == "triggers" and first_component_key == "gitlab-new-issue":
+                        if component_type_used == "triggers": # Only run if we listed triggers
                             print(f"\nAttempting to deploy trigger {first_component_key}...")
-                            # Use previously defined example values or replace
-                            example_gitlab_apn_trigger = "apn_..." # <--- Replace with REAL Gitlab auth ID
-                            example_gitlab_project_id_trigger = 45672541 # <--- Replace with REAL Project ID
+                            example_gitlab_apn_trigger = "apn_..." # <--- Replace
+                            example_gitlab_project_id_trigger = 12345 # <--- Replace
                             example_destination_webhook = "https://your.webhook.url/example" # <--- Replace
-                            deployed_trigger_id_to_manage = None # Reset for this example run
+                            deployed_trigger_id_to_manage = None
 
                             if example_gitlab_apn_trigger != "apn_..." and example_gitlab_project_id_trigger and example_destination_webhook:
                                 try:
@@ -210,29 +220,21 @@ async def main():
                                         configured_props={
                                             "gitlab": {"authProvisionId": example_gitlab_apn_trigger},
                                             "projectId": example_gitlab_project_id_trigger,
-                                            # Other props might be needed depending on the trigger
                                         },
-                                        webhook_url=example_destination_webhook
-                                        # workflow_id="p_..." # Or use workflow_id
-                                        # dynamic_props_id=... # Add if needed
+                                        webhookUrl=example_destination_webhook # Corrected key: webhookUrl
                                     )
                                     deployed_data = deploy_resp['data']
                                     print(f"Successfully deployed trigger:")
                                     print(f"  Deployed ID: {deployed_data['id']}")
-                                    print(f"  Name: {deployed_data['name']}")
-                                    print(f"  Active: {deployed_data['active']}")
-                                    print(f"  Owner ID: {deployed_data['owner_id']}")
-                                    deployed_trigger_id_to_manage = deployed_data['id'] # Store ID for later examples
-
+                                    deployed_trigger_id_to_manage = deployed_data['id']
                                 except PipedreamApiError as e:
                                     print(f"Failed to deploy trigger: {e}")
                             else:
-                                print("Skipping deploy_trigger example: Replace placeholders for Gitlab auth, project ID, and webhook URL.")
+                                print("Skipping deploy_trigger example: Replace placeholders.")
                         # --- End deploy_trigger Example --- #
 
-                        # --- Start Deployed Trigger Examples --- #
-                        # Attempt to get ID from deployment, otherwise list and pick first
-                        temp_trigger_id = deployed_trigger_id_to_manage
+                        # --- Deployed Trigger Examples --- #
+                        temp_trigger_id = deployed_trigger_id_to_manage # Use ID from deploy if available
 
                         # --- get_deployed_triggers --- #
                         print("\nAttempting to list deployed triggers...")
@@ -259,12 +261,13 @@ async def main():
                             # --- get_deployed_trigger_events --- #
                             print(f"\nAttempting to get events for trigger {temp_trigger_id}...")
                             try:
-                                events_resp = await client.get_deployed_trigger_events(temp_trigger_id, external_user_id, limit=5)
-                                print(f"Successfully got {len(events_resp['data'])} events:")
+                                # Corrected parameter: n instead of limit
+                                events_resp = await client.get_deployed_trigger_events(temp_trigger_id, external_user_id, n=5)
+                                print(f"Successfully retrieved {len(events_resp['data'])} events:")
                                 for event in events_resp['data']:
                                      print(f"  - Event ID: {event['id']}, Timestamp: {event['ts']}")
                             except PipedreamApiError as e:
-                                print(f"Failed to get trigger events: {e}")
+                                print(f"Failed to get events: {e}")
 
                             # --- get/update webhooks --- # (Example assumes it had a webhook)
                             print(f"\nAttempting to get webhooks for trigger {temp_trigger_id}...")
@@ -303,7 +306,7 @@ async def main():
                             #     print(f"Failed to delete trigger: {e}")
 
                         else:
-                            print("\nSkipping deployed trigger management examples as no ID was found/provided.")
+                            print("\nSkipping specific deployed trigger examples as no ID was available.")
                         # --- End Deployed Trigger Examples --- #
 
                         # --- create_rate_limit Example --- #
@@ -323,18 +326,13 @@ async def main():
             except PipedreamApiError as e:
                 print(f"Failed to list components: {e}")
 
-    except (PipedreamAuthError, PipedreamApiError, ValueError) as e:
-        print(f"An error occurred: {e}")
+    except PipedreamAuthError as e:
+        print(f"Authentication Error: {e}")
+    except PipedreamApiError as e:
+        print(f"API Error: {e}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
 if __name__ == "__main__":
-     # To run this example:
-     # 1. Install aiohttp: pip install aiohttp
-     # 2. Set environment variables:
-     #    export PD_CLIENT_ID='your_client_id'
-     #    export PD_CLIENT_SECRET='your_client_secret'
-     #    export PD_PROJECT_ID='your_project_id'
-     # 3. Run the script: python example.py
-     # Note: Running top-level await requires Python 3.8+ in REPL or use asyncio.run()
-     asyncio.run(main()) 
+    print("Running Pipedream Client Example...")
+    asyncio.run(main()) 

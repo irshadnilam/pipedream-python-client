@@ -1,6 +1,10 @@
 import aiohttp
-from typing import Optional, List, Dict, Any, TypedDict, cast
+import asyncio
+import base64
+import urllib.parse
+from typing import Optional, List, Dict, Any, TypedDict, cast, Literal, Union
 import time
+import json
 
 class PipedreamAuthError(Exception):
     """Custom exception for Pipedream authentication errors."""
@@ -15,15 +19,17 @@ class ConnectTokenResponse(TypedDict):
     expires_at: str
     connect_link_url: str
 
-class AppInfo(TypedDict):
-    id: str
+# Corrected Literal Type Definition
+AppAuthType = Literal["oauth", "keys", "none"] # type: ignore
+
+class App(TypedDict):
+    id: Optional[str]
+    name_slug: str
     name: str
-    # Add other potential fields from the example if needed, marking as Optional
-    name_slug: Optional[str]
-    auth_type: Optional[str]
+    auth_type: AppAuthType
+    img_src: str
     description: Optional[str]
-    img_src: Optional[str]
-    custom_fields_json: Optional[str] # Assuming string representation of JSON array
+    custom_fields_json: Optional[str]
     categories: Optional[List[str]]
 
 class Account(TypedDict):
@@ -31,13 +37,13 @@ class Account(TypedDict):
     name: Optional[str]
     external_id: str
     healthy: bool
-    dead: Optional[bool] # Can be null in example
-    app: AppInfo
+    dead: Optional[bool]
+    app: App
     created_at: str
     updated_at: str
-    credentials: Optional[Dict[str, Any]] # Changed from AccountCredentials
+    credentials: Optional[Dict[str, Any]]
     expires_at: Optional[str]
-    error: Optional[Any] # Structure unknown
+    error: Optional[Any]
     last_refreshed_at: Optional[str]
     next_refresh_at: Optional[str]
 
@@ -49,7 +55,7 @@ class PageInfo(TypedDict):
 
 class GetAccountsResponse(TypedDict):
     page_info: PageInfo
-    data: List[Account] # The docs show data: { accounts: [...]}, adjusting to list directly for simplicity
+    data: List[Account]
 
 class GetAccountByIdResponse(TypedDict):
     data: Account
@@ -58,47 +64,56 @@ class ComponentSummary(TypedDict):
     name: str
     version: str
     key: str
-    # Add other fields if needed from a more detailed example
-    description: Optional[str] # Added based on V1Component
-    component_type: Optional[str] # Added based on V1Component
+    description: Optional[str]
+    component_type: Optional[str]
 
 class GetComponentsResponse(TypedDict):
     page_info: PageInfo
     data: List[ComponentSummary]
 
-# Represents a single property definition within a component
-class ComponentProp(TypedDict):
+class ComponentProp(TypedDict, total=False):
     name: str
     type: str
-    label: Optional[str]
-    description: Optional[str]
-    app: Optional[str] # If type is 'app'
-    optional: Optional[bool]
-    default: Optional[Any]
-    remoteOptions: Optional[bool] # Deprecated? Use options/asyncOptions?
-    options: Optional[List[Any]] # Or List[Dict[str, Any]] for label/value pairs
-    customResponse: Optional[bool] # For http interface
-    useQuery: Optional[bool]
-    reloadProps: Optional[bool]
-    static: Optional[Dict[str, Any]] # For timer interface
-    # Add other potential prop fields as needed
+    label: str
+    description: str
+    app: str
+    optional: bool
+    default: Any
+    remoteOptions: bool
+    options: List[Any]
+    customResponse: bool
+    useQuery: bool
+    reloadProps: bool
+    static: Dict[str, Any]
+    secret: bool
+    min: int
+    max: int
+    alertType: Literal["info", "neutral", "warning", "error"]
+    content: str
 
 class ComponentDetail(TypedDict):
     name: str
     version: str
     key: str
     configurable_props: List[ComponentProp]
-    # Add other potential fields like 'description', 'app', etc. if available
-    description: Optional[str] # Added based on V1Component
-    component_type: Optional[str] # Added based on V1Component
+    description: Optional[str]
+    component_type: Optional[str]
 
 class GetComponentResponse(TypedDict):
     data: ComponentDetail
 
-class Timings(TypedDict):
+class PropOption(TypedDict):
+    label: str
+    value: Any
+
+class ConfigureComponentResponse(TypedDict):
+    options: Optional[List[PropOption]]
+    stringOptions: Optional[List[str]]
+    errors: List[str]
+    observations: Optional[List[Any]]
+    context: Optional[Any]
     timings: Optional[Dict[str, float]]
 
-# Represents the dynamic props info returned by reload_component_props
 class DynamicPropsInfo(TypedDict):
     id: str
     configurableProps: List[ComponentProp]
@@ -108,67 +123,86 @@ class ReloadComponentPropsResponse(TypedDict):
     errors: List[str]
     observations: Optional[List[Any]]
 
-# Represents the response from running an action
 class RunActionResponse(TypedDict):
-    exports: Dict[str, Any] # Based on example, could be Any if structure varies
-    os: List[Any] # Observations/logs
-    ret: Any # The direct return value of the action
+    exports: Any
+    os: List[Any]
+    ret: Any
 
-# Represents a deployed trigger instance (V1DeployedComponent in TS)
 class DeployedComponent(TypedDict):
-    id: str # The deployed component ID (e.g., dc_xxxx)
-    owner_id: str # Pipedream internal user ID (e.g., exu_xxxx)
-    component_id: str # Source component ID (e.g., sc_xxxx)
+    id: str
+    owner_id: str
+    component_id: str
     configurable_props: List[ComponentProp]
     configured_props: Dict[str, Any]
     active: bool
-    created_at: int # Unix timestamp (seconds)
-    updated_at: int # Unix timestamp (seconds)
+    created_at: int
+    updated_at: int
     name: str
     name_slug: str
-    # callback_observations: Optional[Any] # Field from TS, not in mdx example
+    callback_observations: Optional[Any]
 
-# Response for deploying a trigger
 class DeployTriggerResponse(TypedDict):
     data: DeployedComponent
 
-# Response for listing deployed triggers
 class GetDeployedTriggersResponse(TypedDict):
     page_info: PageInfo
     data: List[DeployedComponent]
 
-# Response for getting a single deployed trigger
 class GetDeployedTriggerResponse(TypedDict):
     data: DeployedComponent
 
-# Represents an emitted event (V1EmittedEvent in TS)
 class EmittedEvent(TypedDict):
-    e: Dict[str, Any] # The event payload
-    k: str # Event type (e.g., "emit")
-    ts: int # Timestamp in milliseconds
-    id: str # Event ID
+    e: Dict[str, Any]
+    k: str
+    ts: int
+    id: str
 
-# Response for getting trigger events
 class GetDeployedTriggerEventsResponse(TypedDict):
     data: List[EmittedEvent]
 
-# Response for getting/updating trigger webhooks
 class GetDeployedTriggerWebhooksResponse(TypedDict):
     webhook_urls: List[str]
 
 class UpdateDeployedTriggerWebhooksResponse(TypedDict):
     webhook_urls: List[str]
 
-# Response for getting/updating trigger workflows
 class GetDeployedTriggerWorkflowsResponse(TypedDict):
     workflow_ids: List[str]
 
 class UpdateDeployedTriggerWorkflowsResponse(TypedDict):
     workflow_ids: List[str]
 
-# Response for creating a rate limit
 class CreateRateLimitResponse(TypedDict):
     token: str
+
+class ProjectInfoResponse(TypedDict):
+    apps: List[App]
+
+class GetAppsResponse(TypedDict):
+    page_info: PageInfo
+    data: List[App]
+
+class GetAppResponse(TypedDict):
+    data: App
+
+class ProxyApiOpts(TypedDict):
+    searchParams: Dict[str, str]
+
+class ProxyTargetApiOpts(TypedDict):
+    method: Literal["GET", "POST", "PUT", "DELETE", "PATCH"]
+    headers: Optional[Dict[str, str]]
+    body: Optional[str]
+
+class ProxyTargetApiRequest(TypedDict):
+    url: str
+    options: ProxyTargetApiOpts
+
+# Corrected Literal Type Definition
+HTTPAuthType = Literal["none", "static_bearer_token", "oauth"] # type: ignore
+
+class UpdateTriggerOpts(TypedDict, total=False):
+    active: bool
+    name: str
 
 class PipedreamClient:
     """Asynchronous client for the Pipedream Connect API."""
@@ -180,8 +214,10 @@ class PipedreamClient:
         client_id: str,
         client_secret: str,
         project_id: str,
-        environment: Optional[str] = None,
+        environment: Literal["development", "production"] = "production",
         session: Optional[aiohttp.ClientSession] = None,
+        api_host: str = "api.pipedream.com",
+        workflow_domain: str = "m.pipedream.net"
     ):
         """
         Initializes the Pipedream async client.
@@ -190,18 +226,26 @@ class PipedreamClient:
             client_id: Your Pipedream OAuth client ID.
             client_secret: Your Pipedream OAuth client secret.
             project_id: Your Pipedream project ID.
-            environment: Optional environment ('development' or 'production').
+            environment: Environment ('development' or 'production'). Defaults to 'production'.
             session: Optional external aiohttp.ClientSession.
+            api_host: Pipedream API host. Defaults to 'api.pipedream.com'.
+            workflow_domain: Base domain for workflows. Defaults to 'm.pipedream.net'.
         """
         if not client_id or not client_secret or not project_id:
             raise ValueError("client_id, client_secret, and project_id are required.")
+        if environment not in ["development", "production"]:
+             raise ValueError("environment must be 'development' or 'production'.")
 
         self._client_id = client_id
         self._client_secret = client_secret
         self._project_id = project_id
         self._environment = environment
         self._session = session or aiohttp.ClientSession()
-        self._close_session = session is None  # Flag to close session only if created internally
+        self._close_session = session is None
+
+        self._api_host = api_host
+        self._workflow_domain = workflow_domain
+        self._base_api_url = f"https://{self._api_host}/v1"
 
         self._access_token: Optional[str] = None
         self._token_expires_at: float = 0
@@ -220,12 +264,12 @@ class PipedreamClient:
     async def _get_access_token(self) -> str:
         """
         Retrieves an OAuth access token using client credentials.
-        Handles token caching and expiration.
+        Handles token caching and expiration. Uses configured API host.
         """
         if self._access_token and time.time() < self._token_expires_at:
             return self._access_token
 
-        token_url = f"{self.BASE_URL}/oauth/token"
+        token_url = f"https://{self._api_host}/v1/oauth/token"
         payload = {
             "grant_type": "client_credentials",
             "client_id": self._client_id,
@@ -238,8 +282,7 @@ class PipedreamClient:
                 if response.status == 200:
                     data = await response.json()
                     self._access_token = data.get("access_token")
-                    # Set expiry slightly before actual expiry (e.g., 60 seconds buffer)
-                    expires_in = data.get("expires_in", 3600) # Default to 1 hour if not provided
+                    expires_in = data.get("expires_in", 3600)
                     self._token_expires_at = time.time() + expires_in - 60
                     if not self._access_token:
                          raise PipedreamAuthError("Failed to retrieve access token: 'access_token' missing in response.")
@@ -258,39 +301,81 @@ class PipedreamClient:
         path: str,
         params: Optional[Dict[str, Any]] = None,
         json_data: Optional[Dict[str, Any]] = None,
+        data: Optional[Any] = None,
+        headers: Optional[Dict[str, str]] = None,
         requires_auth: bool = True,
+        base_url_override: Optional[str] = None,
+        include_pd_headers: bool = True,
+        expected_status: Union[int, List[int]] = 200,
     ) -> Dict[str, Any]:
-        """Makes an authenticated request to the Pipedream API."""
-        url = f"{self.BASE_URL}/{path.lstrip('/')}"
-        headers = {
-            "Content-Type": "application/json",
+        """Makes a request to the Pipedream API or other URLs."""
+        url = f"{base_url_override or self._base_api_url}/{path.lstrip('/')}"
+
+        query_params: Dict[str, str] = {}
+        if params:
+            for key, value in params.items():
+                if value is not None:
+                    if isinstance(value, bool):
+                         query_params[key] = str(value).lower()
+                    else:
+                         query_params[key] = str(value)
+
+        request_headers = {
             "Accept": "application/json",
         }
 
+        if headers:
+             request_headers.update(headers)
+
+        if include_pd_headers:
+             request_headers.setdefault("X-PD-SDK-Version", "pipedream-python-sdk-dev")
+             request_headers.setdefault("X-PD-Environment", self._environment)
+
+        request_body: Optional[Any] = None
+        if json_data is not None:
+            request_headers.setdefault("Content-Type", "application/json")
+            request_body = json.dumps(json_data)
+        elif data is not None:
+            request_body = data
+
         if requires_auth:
             access_token = await self._get_access_token()
-            headers["Authorization"] = f"Bearer {access_token}"
-
-        if self._environment:
-            headers["X-PD-Environment"] = self._environment
+            request_headers.setdefault("Authorization", f"Bearer {access_token}")
 
         try:
             async with self._session.request(
-                method, url, params=params, json=json_data, headers=headers
+                method, url, params=query_params, data=request_body, headers=request_headers
             ) as response:
-                response_data = await response.json() # Assume JSON response for simplicity
-                if 200 <= response.status < 300:
-                    return response_data
+
+                expected_statuses = [expected_status] if isinstance(expected_status, int) else expected_status
+                if response.status in expected_statuses:
+                     if response.status == 204:
+                         return {}
+
+                     content_type = response.headers.get("Content-Type", "")
+                     if "application/json" in content_type:
+                         try:
+                             return await response.json()
+                         except json.JSONDecodeError as e:
+                              raise PipedreamApiError(f"Failed to decode JSON response: {e} - Status: {response.status}")
+                     else:
+                         return {"raw_response": await response.text()}
                 else:
+                    try:
+                        error_data = await response.json()
+                        error_message = error_data.get('error', {}).get('message', str(error_data))
+                    except (aiohttp.ContentTypeError, ValueError, json.JSONDecodeError):
+                        error_message = await response.text()
                     raise PipedreamApiError(
-                        f"API request failed: {response.status} - {response_data.get('error', {}).get('message', response_data)}"
+                        f"API request failed: {response.status} - {error_message}"
                     )
         except aiohttp.ClientError as e:
             raise PipedreamApiError(f"Network error during API request: {e}")
-        except ValueError: # Catches JSONDecodeError
-             error_text = await response.text()
-             raise PipedreamApiError(f"Failed to decode JSON response: {response.status} - {error_text}")
 
+    async def _connect_request(self, path: str, **kwargs):
+         """Helper for requests prefixed with /connect/{project_id}."""
+         full_path = f"connect/{self._project_id}/{path.lstrip('/')}"
+         return await self._request(path=full_path, **kwargs)
 
     async def create_connect_token(
         self,
@@ -300,457 +385,212 @@ class PipedreamClient:
         error_redirect_uri: Optional[str] = None,
         webhook_uri: Optional[str] = None,
     ) -> ConnectTokenResponse:
-        """
-        Creates a short-lived token for initiating account connections.
-
-        Args:
-            external_user_id: The ID of your end user in your system.
-            allowed_origins: List of URLs allowed to make requests with the token (required for client-side).
-            success_redirect_uri: Optional redirect URI on successful auth (Connect Link).
-            error_redirect_uri: Optional redirect URI on auth error (Connect Link).
-            webhook_uri: Optional webhook URL for auth events.
-
-        Returns:
-            A dictionary containing the token, expiration time, and connect link URL.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required parameters are missing.
-        """
+        """Creates a short-lived token for initiating account connections."""
         if not external_user_id:
             raise ValueError("external_user_id is required.")
 
-        path = f"connect/{self._project_id}/tokens"
-        payload: Dict[str, Any] = {"external_user_id": external_user_id}
+        path = "tokens"
+        payload: Dict[str, Any] = {
+            "external_user_id": external_user_id,
+            "external_id": external_user_id,
+        }
+        if allowed_origins: payload["allowed_origins"] = allowed_origins
+        if success_redirect_uri: payload["success_redirect_uri"] = success_redirect_uri
+        if error_redirect_uri: payload["error_redirect_uri"] = error_redirect_uri
+        if webhook_uri: payload["webhook_uri"] = webhook_uri
 
-        if allowed_origins:
-            payload["allowed_origins"] = allowed_origins
-        if success_redirect_uri:
-            payload["success_redirect_uri"] = success_redirect_uri
-        if error_redirect_uri:
-            payload["error_redirect_uri"] = error_redirect_uri
-        if webhook_uri:
-            payload["webhook_uri"] = webhook_uri
+        response_data = await self._connect_request(path, method="POST", json_data=payload)
 
-        response_data = await self._request("POST", path, json_data=payload)
-
-        # Validate expected keys are in the response
-        if not all(k in response_data for k in ["token", "expires_at", "connect_link_url"]):
-             raise PipedreamApiError(f"Unexpected response format for create_connect_token: {response_data}")
-
-        return ConnectTokenResponse(
-            token=response_data["token"],
-            expires_at=response_data["expires_at"],
-            connect_link_url=response_data["connect_link_url"]
-        )
+        return cast(ConnectTokenResponse, response_data)
 
     async def get_accounts(
         self,
+        external_user_id: Optional[str] = None,
         app_filter: Optional[str] = None,
         oauth_app_id: Optional[str] = None,
-        external_user_id: Optional[str] = None,
         include_credentials: bool = False,
-        limit: Optional[int] = None, # Added standard pagination param
-        cursor: Optional[str] = None, # Added standard pagination param
+        limit: Optional[int] = None,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
     ) -> GetAccountsResponse:
-        """
-        Lists connected accounts within the project.
-
-        Args:
-            app_filter: Optional app ID or name slug to filter by (e.g., 'slack' or 'app_OkrhR1').
-            oauth_app_id: Optional OAuth app ID to filter accounts for.
-            external_user_id: Optional external user ID to filter accounts for.
-            include_credentials: If True, includes account credentials in the response (use with caution).
-            limit: Optional maximum number of accounts to return.
-            cursor: Optional pagination cursor for fetching the next page.
-
-        Returns:
-            A dictionary containing pagination info and a list of accounts.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-        """
-        path = f"connect/{self._project_id}/accounts"
-        params: Dict[str, Any] = {}
-        if app_filter:
-            params["app"] = app_filter
-        if oauth_app_id:
-            params["oauth_app_id"] = oauth_app_id
-        if external_user_id:
-            params["external_user_id"] = external_user_id
-        if include_credentials:
-            # API uses string 'true', ensure correct type
-            params["include_credentials"] = str(include_credentials).lower()
-        if limit:
-            params["limit"] = limit
-        if cursor:
-            params["cursor"] = cursor # Assuming API uses 'cursor' for pagination
-
-        response_data = await self._request("GET", path, params=params)
-
-        # Basic validation of response structure
-        if "page_info" not in response_data or "data" not in response_data:
-             raise PipedreamApiError(f"Unexpected response format for get_accounts: {response_data}")
-
-        # The API response has { data: { accounts: [...] } }, this method adapts it.
-        # The TypedDict expects the final structure: { page_info: ..., data: List[Account] }
-        accounts_data = response_data["data"]
-        if isinstance(accounts_data, dict) and "accounts" in accounts_data:
-            account_list = accounts_data["accounts"]
-        elif isinstance(accounts_data, list):
-             # Handle cases where the API might return just the list directly under data
-             account_list = accounts_data
-        else:
-             raise PipedreamApiError(f"Unexpected 'data' structure in get_accounts response: {accounts_data}")
-
-        return GetAccountsResponse(
-            page_info=response_data["page_info"],
-            data=account_list # Ensure this matches the TypedDict
-        )
+        """Lists connected accounts."""
+        path = "accounts"
+        params: Dict[str, Any] = {
+            "external_user_id": external_user_id,
+            "app": app_filter,
+            "oauth_app_id": oauth_app_id,
+            "include_credentials": include_credentials,
+            "limit": limit,
+            "after": after,
+            "before": before,
+        }
+        response_data = await self._connect_request(path, method="GET", params=params)
+        return cast(GetAccountsResponse, response_data)
 
     async def get_account_by_id(
         self,
         account_id: str,
+        external_user_id: Optional[str] = None,
         include_credentials: bool = False,
     ) -> GetAccountByIdResponse:
-        """
-        Retrieves details for a specific connected account.
+        """Retrieves details for a specific connected account."""
+        if not account_id: raise ValueError("account_id is required.")
+        path = f"accounts/{account_id}"
+        params = {
+            "include_credentials": include_credentials,
+             "external_user_id": external_user_id
+        }
+        response_data = await self._connect_request(path, method="GET", params=params)
+        return cast(GetAccountByIdResponse, response_data)
 
-        Args:
-            account_id: The ID of the account to retrieve (e.g., 'apn_WYhMlrz').
-            include_credentials: If True, includes account credentials in the response.
+    async def delete_account(self, account_id: str, external_user_id: Optional[str] = None) -> None:
+        """Deletes a specific connected account."""
+        if not account_id: raise ValueError("account_id is required.")
+        path = f"accounts/{account_id}"
+        params = {"external_user_id": external_user_id}
+        await self._connect_request(path, method="DELETE", params=params, expected_status=204)
 
-        Returns:
-            A dictionary containing the account details under the 'data' key.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails or the response format is unexpected.
-            ValueError: If account_id is not provided.
-        """
-        if not account_id:
-            raise ValueError("account_id is required.")
-
-        path = f"connect/{self._project_id}/accounts/{account_id}"
-        params: Dict[str, Any] = {}
-        if include_credentials:
-            params["include_credentials"] = str(include_credentials).lower()
-
-        response_data = await self._request("GET", path, params=params)
-
-        # Basic validation of response structure
-        if "data" not in response_data or not isinstance(response_data["data"], dict):
-             raise PipedreamApiError(f"Unexpected response format for get_account_by_id: {response_data}")
-        if "id" not in response_data["data"]: # Check for essential key within data
-             raise PipedreamApiError(f"Missing 'id' in account data for get_account_by_id: {response_data['data']}")
-
-        # The type checker expects the structure defined in GetAccountByIdResponse
-        # We assume the structure matches the Account TypedDict under the 'data' key
-        # Cast to assure the type checker
-        return GetAccountByIdResponse(data=cast(Account, response_data["data"]))
-
-    async def delete_account(self, account_id: str) -> None:
-        """
-        Deletes a specific connected account.
-
-        Args:
-            account_id: The ID of the account to delete.
-
-        Returns:
-            None
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails (e.g., account not found, permission error).
-            ValueError: If account_id is not provided.
-        """
-        if not account_id:
-            raise ValueError("account_id is required.")
-
-        path = f"connect/{self._project_id}/accounts/{account_id}"
-
-        # Use _request but expect no JSON body on success (204)
-        # Modify _request or handle 204 specifically here
-        url = f"{self.BASE_URL}/{path.lstrip('/')}"
-        headers = {"Accept": "application/json"} # Still accept JSON for potential errors
-
-        access_token = await self._get_access_token()
-        headers["Authorization"] = f"Bearer {access_token}"
-
-        if self._environment:
-            headers["X-PD-Environment"] = self._environment
-
-        try:
-            async with self._session.delete(url, headers=headers) as response:
-                if response.status == 204:
-                    return # Success
-                else:
-                    # Try to get error details if available
-                    try:
-                        error_data = await response.json()
-                        error_message = error_data.get('error', {}).get('message', str(error_data))
-                    except (aiohttp.ContentTypeError, ValueError): # Handle non-JSON or decode error
-                        error_message = await response.text()
-                    raise PipedreamApiError(
-                        f"API request failed: {response.status} - {error_message}"
-                    )
-        except aiohttp.ClientError as e:
-            raise PipedreamApiError(f"Network error during API request: {e}")
-
-    async def delete_accounts_by_app(self, app_id: str) -> None:
-        """
-        Deletes all connected accounts for a specific app within the project.
-
-        Args:
-            app_id: The app ID (e.g., 'app_OkrhR1') or name slug (e.g., 'slack')
-                    for which to delete all connected accounts.
-
-        Returns:
-            None
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If app_id is not provided.
-        """
-        if not app_id:
-            raise ValueError("app_id is required.")
-
-        path = f"connect/{self._project_id}/apps/{app_id}/accounts"
-
-        # Similar to delete_account, expect 204 on success
-        url = f"{self.BASE_URL}/{path.lstrip('/')}"
-        headers = {"Accept": "application/json"}
-
-        access_token = await self._get_access_token()
-        headers["Authorization"] = f"Bearer {access_token}"
-
-        if self._environment:
-            headers["X-PD-Environment"] = self._environment
-
-        try:
-            async with self._session.delete(url, headers=headers) as response:
-                if response.status == 204:
-                    return # Success
-                else:
-                    try:
-                        error_data = await response.json()
-                        error_message = error_data.get('error', {}).get('message', str(error_data))
-                    except (aiohttp.ContentTypeError, ValueError):
-                        error_message = await response.text()
-                    raise PipedreamApiError(
-                        f"API request failed: {response.status} - {error_message}"
-                    )
-        except aiohttp.ClientError as e:
-            raise PipedreamApiError(f"Network error during API request: {e}")
+    async def delete_accounts_by_app(self, app_id: str, external_user_id: Optional[str] = None) -> None:
+        """Deletes all connected accounts for a specific app."""
+        if not app_id: raise ValueError("app_id is required.")
+        path = f"accounts/app/{app_id}"
+        params = {"external_user_id": external_user_id}
+        await self._connect_request(path, method="DELETE", params=params, expected_status=204)
 
     async def delete_external_user(self, external_user_id: str) -> None:
-        """
-        Deletes an end user, all their connected accounts, and any deployed triggers.
+        """Deletes an end user and all associated data."""
+        if not external_user_id: raise ValueError("external_user_id is required.")
+        path = f"users/{external_user_id}"
+        await self._connect_request(path, method="DELETE", expected_status=204)
 
-        Args:
-            external_user_id: The external user ID in your system.
+    async def get_project_info(self) -> ProjectInfoResponse:
+        """Retrieves the project's information (e.g., linked apps)."""
+        path = "projects/info"
+        response_data = await self._connect_request(path, method="GET")
+        return cast(ProjectInfoResponse, response_data)
 
-        Returns:
-            None
+    async def get_apps(
+        self,
+        q: Optional[str] = None,
+        has_actions: Optional[bool] = None,
+        has_components: Optional[bool] = None,
+        has_triggers: Optional[bool] = None,
+        limit: Optional[int] = None,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+    ) -> GetAppsResponse:
+        """Retrieves the list of apps available in Pipedream."""
+        path = "apps"
+        params = {
+            "q": q,
+            "has_actions": has_actions,
+            "has_components": has_components,
+            "has_triggers": has_triggers,
+            "limit": limit,
+            "after": after,
+            "before": before,
+        }
+        response_data = await self._request(path=path, method="GET", params=params)
+        return cast(GetAppsResponse, response_data)
 
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If external_user_id is not provided.
-        """
-        if not external_user_id:
-            raise ValueError("external_user_id is required.")
-
-        path = f"connect/{self._project_id}/users/{external_user_id}"
-
-        # Expect 204 on success
-        url = f"{self.BASE_URL}/{path.lstrip('/')}"
-        headers = {"Accept": "application/json"}
-
-        access_token = await self._get_access_token()
-        headers["Authorization"] = f"Bearer {access_token}"
-
-        if self._environment:
-            headers["X-PD-Environment"] = self._environment
-
-        try:
-            async with self._session.delete(url, headers=headers) as response:
-                if response.status == 204:
-                    return # Success
-                else:
-                    try:
-                        error_data = await response.json()
-                        error_message = error_data.get('error', {}).get('message', str(error_data))
-                    except (aiohttp.ContentTypeError, ValueError):
-                        error_message = await response.text()
-                    raise PipedreamApiError(
-                        f"API request failed: {response.status} - {error_message}"
-                    )
-        except aiohttp.ClientError as e:
-            raise PipedreamApiError(f"Network error during API request: {e}")
-
-    # --- Components --- #
+    async def get_app(self, app_id_or_slug: str) -> GetAppResponse:
+        """Retrieves metadata for a specific app."""
+        if not app_id_or_slug: raise ValueError("app_id_or_slug is required.")
+        path = f"apps/{app_id_or_slug}"
+        response_data = await self._request(path=path, method="GET")
+        return cast(GetAppResponse, response_data)
 
     async def get_components(
         self,
-        component_type: str, # 'triggers', 'actions', or 'components'
+        component_type: Literal["triggers", "actions", "components"],
         app_filter: Optional[str] = None,
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
-        cursor: Optional[str] = None,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
     ) -> GetComponentsResponse:
-        """
-        Lists components (triggers, actions, or general components) in the registry.
-
-        Args:
-            component_type: The type of component to list ('triggers', 'actions', 'components').
-            app_filter: Optional app ID or name slug to filter by.
-            search_query: Optional search query ('q') to filter components by key/name.
-            limit: Optional maximum number of components to return.
-            cursor: Optional pagination cursor.
-
-        Returns:
-            A dictionary containing pagination info and a list of component summaries.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If component_type is invalid.
-        """
-        valid_types = ["triggers", "actions", "components"]
-        if component_type not in valid_types:
-            raise ValueError(f"Invalid component_type: '{component_type}'. Must be one of {valid_types}")
-
-        # Note: The API path seems to be /v1/{component_type} based on docs, not /v1/connect/{project_id}/{component_type}
-        # Adjusting path based on GET /{component_type} example
-        # However, auth/project scoping might still be needed implicitly or via headers.
-        # Let's assume the connect base path IS needed for consistency unless proven otherwise.
-        path = f"connect/{self._project_id}/{component_type}"
-        # If the above fails, the alternative path structure from docs is simply: path = component_type
-
-        params: Dict[str, Any] = {}
-        if app_filter:
-            params["app"] = app_filter
-        if search_query:
-            params["q"] = search_query
-        if limit:
-            params["limit"] = limit
-        if cursor:
-            params["cursor"] = cursor
-
-        response_data = await self._request("GET", path, params=params)
-
-        if "page_info" not in response_data or "data" not in response_data or not isinstance(response_data["data"], list):
-            raise PipedreamApiError(f"Unexpected response format for get_components: {response_data}")
-
-        return GetComponentsResponse(
-            page_info=response_data["page_info"],
-            data=response_data["data"]
-        )
+        """Lists components (triggers, actions, or general components)."""
+        if component_type not in ["triggers", "actions", "components"]:
+             raise ValueError("Invalid component_type.")
+        path = component_type
+        params = {
+             "app": app_filter,
+             "q": search_query,
+             "limit": limit,
+             "after": after,
+             "before": before,
+        }
+        response_data = await self._connect_request(path=path, method="GET", params=params)
+        return cast(GetComponentsResponse, response_data)
 
     async def get_component(
         self,
-        component_type: str,
+        component_type: Literal["triggers", "actions", "components"],
         component_key: str,
     ) -> GetComponentResponse:
-        """
-        Retrieves details for a specific component from the registry.
+        """Retrieves details for a specific component."""
+        if component_type not in ["triggers", "actions", "components"]:
+             raise ValueError("Invalid component_type.")
+        if not component_key: raise ValueError("component_key is required.")
+        path = f"{component_type}/{component_key}"
+        response_data = await self._connect_request(path=path, method="GET")
+        return cast(GetComponentResponse, response_data)
 
-        Args:
-            component_type: The type of component ('triggers', 'actions', 'components').
-            component_key: The key identifying the component (e.g., 'gitlab-new-issue').
-
-        Returns:
-            A dictionary containing the component details under the 'data' key.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If component_type is invalid or component_key is missing.
-        """
-        valid_types = ["triggers", "actions", "components"]
-        if component_type not in valid_types:
-            raise ValueError(f"Invalid component_type: '{component_type}'. Must be one of {valid_types}")
-        if not component_key:
-            raise ValueError("component_key is required.")
-
-        # Assuming consistent path structure with /connect/{project_id}/
-        path = f"connect/{self._project_id}/{component_type}/{component_key}"
-        # Alternative path if needed: path = f"{component_type}/{component_key}"
-
-        response_data = await self._request("GET", path)
-
-        if "data" not in response_data or not isinstance(response_data["data"], dict):
-             raise PipedreamApiError(f"Unexpected response format for get_component: {response_data}")
-        if "key" not in response_data["data"] or "configurable_props" not in response_data["data"]:
-             raise PipedreamApiError(f"Missing essential keys in component data for get_component: {response_data['data']}")
-
-        # Cast needed because _request returns Dict[str, Any]
-        return GetComponentResponse(data=cast(ComponentDetail, response_data["data"]))
+    async def configure_component(
+        self,
+        component_type: Literal["triggers", "actions", "components"],
+        component_key: str,
+        prop_name: str,
+        external_user_id: str,
+        configured_props: Dict[str, Any],
+        dynamic_props_id: Optional[str] = None,
+        page: Optional[int] = None,
+        prev_context: Optional[Any] = None,
+        query: Optional[str] = None,
+    ) -> ConfigureComponentResponse:
+        """Configures a component's prop, retrieving dynamic options."""
+        if component_type not in ["triggers", "actions", "components"]:
+             raise ValueError("Invalid component_type.")
+        if not all([component_key, prop_name, external_user_id]):
+            raise ValueError("component_key, prop_name, and external_user_id are required.")
+        path = "components/configure"
+        payload = {
+            "id": component_key,
+            "prop_name": prop_name,
+            "external_user_id": external_user_id,
+            "configured_props": configured_props,
+            "dynamic_props_id": dynamic_props_id,
+            "page": page,
+            "prev_context": prev_context,
+            "query": query,
+        }
+        filtered_payload = {k: v for k, v in payload.items() if v is not None}
+        response_data = await self._connect_request(path=path, method="POST", json_data=filtered_payload)
+        return cast(ConfigureComponentResponse, response_data)
 
     async def reload_component_props(
         self,
-        component_type: str,
+        component_type: Literal["triggers", "actions", "components"],
         component_key: str,
         external_user_id: str,
         configured_props: Dict[str, Any],
         dynamic_props_id: Optional[str] = None,
     ) -> ReloadComponentPropsResponse:
-        """
-        Reloads a component's props, typically after setting a dynamic prop.
-
-        Args:
-            component_type: The type of component ('triggers', 'actions', 'components').
-            component_key: The key identifying the component.
-            external_user_id: The external user ID in your system.
-            configured_props: Dictionary of props already configured for the component.
-            dynamic_props_id: Optional ID from a previous prop reconfiguration.
-
-        Returns:
-            A dictionary containing the potentially updated dynamic props structure.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing or component_type is invalid.
-        """
-        valid_types = ["triggers", "actions", "components"]
-        if component_type not in valid_types:
-            raise ValueError(f"Invalid component_type: '{component_type}'. Must be one of {valid_types}")
+        """Reloads a component's props, typically after setting a dynamic prop."""
+        if component_type not in ["triggers", "actions", "components"]:
+             raise ValueError("Invalid component_type.")
         if not all([component_key, external_user_id]):
             raise ValueError("component_key and external_user_id are required.")
-
-        # Path structure based on docs: /{component_type}/props
-        # Assuming /connect/{project_id} prefix is needed
-        path = f"connect/{self._project_id}/{component_type}/props"
-
+        path = "components/props"
         payload = {
             "id": component_key,
             "external_user_id": external_user_id,
             "configured_props": configured_props,
+            "dynamic_props_id": dynamic_props_id,
         }
-        if dynamic_props_id:
-            payload["dynamic_props_id"] = dynamic_props_id
-
-        response_data = await self._request("POST", path, json_data=payload)
-
-        # Basic validation
-        if "dynamicProps" not in response_data or not isinstance(response_data["dynamicProps"], dict):
-             raise PipedreamApiError(f"Missing or invalid 'dynamicProps' in response for reload_component_props: {response_data}")
-        if "id" not in response_data["dynamicProps"] or "configurableProps" not in response_data["dynamicProps"]:
-             raise PipedreamApiError(f"Missing keys within 'dynamicProps' in response for reload_component_props: {response_data['dynamicProps']}")
-
-        # Cast needed due to _request return type
-        dynamic_props_data = cast(DynamicPropsInfo, response_data["dynamicProps"])
-
-        return ReloadComponentPropsResponse(
-            dynamicProps=dynamic_props_data,
-            errors=response_data.get("errors", []),
-            observations=response_data.get("observations")
-        )
+        filtered_payload = {k: v for k, v in payload.items() if v is not None}
+        response_data = await self._connect_request(path=path, method="POST", json_data=filtered_payload)
+        return cast(ReloadComponentPropsResponse, response_data)
 
     async def run_action(
         self,
@@ -759,49 +599,19 @@ class PipedreamClient:
         configured_props: Dict[str, Any],
         dynamic_props_id: Optional[str] = None,
     ) -> RunActionResponse:
-        """
-        Invokes an action component for a Pipedream Connect user.
-
-        Args:
-            action_key: The key identifying the action component (e.g., 'gitlab-list-commits').
-            external_user_id: The external user ID in your system.
-            configured_props: Dictionary of props configured for the action.
-            dynamic_props_id: Optional ID from a previous prop reconfiguration.
-
-        Returns:
-            A dictionary containing the action's exports, observations (logs), and return value.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing.
-        """
+        """Invokes an action component."""
         if not all([action_key, external_user_id]):
              raise ValueError("action_key and external_user_id are required.")
-
-        # Path: /actions/run - Note: component_type is 'actions' implicitly
-        path = f"connect/{self._project_id}/actions/run"
-
+        path = "actions/run"
         payload = {
             "id": action_key,
             "external_user_id": external_user_id,
             "configured_props": configured_props,
+            "dynamic_props_id": dynamic_props_id,
         }
-        if dynamic_props_id:
-            payload["dynamic_props_id"] = dynamic_props_id
-
-        response_data = await self._request("POST", path, json_data=payload)
-
-        # Basic validation based on example response keys
-        if not all(k in response_data for k in ["exports", "os", "ret"]):
-            raise PipedreamApiError(f"Unexpected response format for run_action: {response_data}")
-
-        # Using Any for ret, os elements, and exports values for flexibility
-        return RunActionResponse(
-            exports=response_data["exports"],
-            os=response_data["os"],
-            ret=response_data["ret"]
-        )
+        filtered_payload = {k: v for k, v in payload.items() if v is not None}
+        response_data = await self._connect_request(path=path, method="POST", json_data=filtered_payload)
+        return cast(RunActionResponse, response_data)
 
     async def deploy_trigger(
         self,
@@ -812,139 +622,56 @@ class PipedreamClient:
         workflow_id: Optional[str] = None,
         dynamic_props_id: Optional[str] = None,
     ) -> DeployTriggerResponse:
-        """
-        Deploys a trigger component for a Pipedream Connect user.
-
-        Args:
-            trigger_key: The key identifying the trigger component (e.g., 'gitlab-new-issue').
-            external_user_id: The external user ID in your system.
-            configured_props: Dictionary of props configured for the trigger.
-            webhook_url: Optional URL to which the trigger will send events.
-            workflow_id: Optional Pipedream workflow ID (p_...) to which events are sent.
-            dynamic_props_id: Optional ID from a previous prop reconfiguration.
-
-        Returns:
-            A dictionary containing the details of the deployed trigger under the 'data' key.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing or webhook/workflow conflict.
-        """
+        """Deploys a trigger component."""
         if not all([trigger_key, external_user_id]):
              raise ValueError("trigger_key and external_user_id are required.")
         if webhook_url and workflow_id:
              raise ValueError("Provide either webhook_url or workflow_id, not both.")
-        # Note: The API might allow deploying without either webhook_url or workflow_id,
-        # depending on the trigger type (e.g., if it uses $.interface.timer internally).
-        # We won't enforce having one here, letting the API decide.
-
-        # Path: /triggers/deploy
-        path = f"connect/{self._project_id}/triggers/deploy"
-
-        payload = {
-            "id": trigger_key, # Maps to triggerId in TS opts
+        path = "triggers/deploy"
+        payload: Dict[str, Any] = {
+            "id": trigger_key,
             "external_user_id": external_user_id,
             "configured_props": configured_props,
+            "dynamic_props_id": dynamic_props_id,
+            "webhookUrl": webhook_url,
+            "workflowId": workflow_id,
         }
-        if webhook_url:
-            payload["webhook_url"] = webhook_url # Key based on .mdx
-        if workflow_id:
-            payload["workflowId"] = workflow_id # Key based on TS DeployTriggerOpts
-        if dynamic_props_id:
-            payload["dynamic_props_id"] = dynamic_props_id
 
-        response_data = await self._request("POST", path, json_data=payload)
-
-        # Basic validation based on example response structure
-        if "data" not in response_data or not isinstance(response_data["data"], dict):
-            raise PipedreamApiError(f"Unexpected response format for deploy_trigger: {response_data}")
-        if "id" not in response_data["data"] or "component_id" not in response_data["data"]:
-             raise PipedreamApiError(f"Missing essential keys in deploy_trigger data: {response_data['data']}")
-
-        # Cast needed because _request returns Dict[str, Any]
-        return DeployTriggerResponse(data=cast(DeployedComponent, response_data["data"]))
-
-    # --- Deployed Triggers --- #
+        filtered_payload = {k: v for k, v in payload.items() if v is not None}
+        response_data = await self._connect_request(path=path, method="POST", json_data=filtered_payload)
+        return cast(DeployTriggerResponse, response_data)
 
     async def get_deployed_triggers(
         self,
         external_user_id: str,
         limit: Optional[int] = None,
-        cursor: Optional[str] = None,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
     ) -> GetDeployedTriggersResponse:
-        """
-        Lists deployed triggers for a specific external user.
-
-        Args:
-            external_user_id: The external user ID in your system.
-            limit: Optional maximum number of triggers to return.
-            cursor: Optional pagination cursor.
-
-        Returns:
-            A dictionary containing pagination info and a list of deployed triggers.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If external_user_id is missing.
-        """
-        if not external_user_id:
-            raise ValueError("external_user_id is required.")
-
-        path = f"connect/{self._project_id}/deployed-triggers"
-        params: Dict[str, Any] = {"external_user_id": external_user_id}
-        if limit:
-            params["limit"] = limit
-        if cursor:
-            # Assuming cursor param is named 'cursor', aligned with get_accounts
-            # TS uses 'after'/'before', might need adjustment if API differs
-            params["cursor"] = cursor
-
-        response_data = await self._request("GET", path, params=params)
-
-        if not all(k in response_data for k in ["page_info", "data"]) or not isinstance(response_data["data"], list):
-            raise PipedreamApiError(f"Unexpected response format for get_deployed_triggers: {response_data}")
-
-        return GetDeployedTriggersResponse(
-            page_info=response_data["page_info"],
-            data=response_data["data"] # Assuming data is List[DeployedComponent]
-        )
+        """Lists deployed triggers for a specific external user."""
+        if not external_user_id: raise ValueError("external_user_id is required.")
+        path = "deployed-triggers"
+        params = {
+            "external_user_id": external_user_id,
+            "limit": limit,
+            "after": after,
+            "before": before,
+        }
+        response_data = await self._connect_request(path, method="GET", params=params)
+        return cast(GetDeployedTriggersResponse, response_data)
 
     async def get_deployed_trigger(
         self,
         deployed_component_id: str,
         external_user_id: str,
     ) -> GetDeployedTriggerResponse:
-        """
-        Retrieves details for a specific deployed trigger.
-
-        Args:
-            deployed_component_id: The ID of the deployed trigger (e.g., 'dc_xxxxxxx').
-            external_user_id: The external user ID associated with the trigger.
-
-        Returns:
-            A dictionary containing the deployed trigger details under the 'data' key.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing.
-        """
+        """Retrieves details for a specific deployed trigger."""
         if not all([deployed_component_id, external_user_id]):
             raise ValueError("deployed_component_id and external_user_id are required.")
-
-        path = f"connect/{self._project_id}/deployed-triggers/{deployed_component_id}"
+        path = f"deployed-triggers/{deployed_component_id}"
         params = {"external_user_id": external_user_id}
-
-        response_data = await self._request("GET", path, params=params)
-
-        if "data" not in response_data or not isinstance(response_data["data"], dict):
-             raise PipedreamApiError(f"Unexpected response format for get_deployed_trigger: {response_data}")
-        if "id" not in response_data["data"]: # Check essential key
-             raise PipedreamApiError(f"Missing 'id' in deployed trigger data: {response_data['data']}")
-
-        return GetDeployedTriggerResponse(data=cast(DeployedComponent, response_data["data"]))
+        response_data = await self._connect_request(path, method="GET", params=params)
+        return cast(GetDeployedTriggerResponse, response_data)
 
     async def delete_deployed_trigger(
         self,
@@ -952,121 +679,67 @@ class PipedreamClient:
         external_user_id: str,
         ignore_hook_errors: bool = False,
     ) -> None:
-        """
-        Deletes a specific deployed trigger.
-
-        Args:
-            deployed_component_id: The ID of the deployed trigger to delete.
-            external_user_id: The external user ID associated with the trigger.
-            ignore_hook_errors: If True, ignores errors during the trigger's deactivation hook.
-
-        Returns: None
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing.
-        """
+        """Deletes a specific deployed trigger."""
         if not all([deployed_component_id, external_user_id]):
             raise ValueError("deployed_component_id and external_user_id are required.")
+        path = f"deployed-triggers/{deployed_component_id}"
+        params = {
+            "external_user_id": external_user_id,
+             "ignore_hook_errors": ignore_hook_errors,
+        }
+        await self._connect_request(path, method="DELETE", params=params, expected_status=204)
 
-        path = f"connect/{self._project_id}/deployed-triggers/{deployed_component_id}"
-        url = f"{self.BASE_URL}/{path.lstrip('/')}"
+    async def update_deployed_trigger(
+        self,
+        deployed_component_id: str,
+        external_user_id: str,
+        active: Optional[bool] = None,
+        name: Optional[str] = None,
+    ) -> GetDeployedTriggerResponse:
+        """Updates a specific deployed trigger (name or active status)."""
+        if not all([deployed_component_id, external_user_id]):
+            raise ValueError("deployed_component_id and external_user_id are required.")
+        if active is None and name is None:
+             raise ValueError("Either active or name must be provided to update.")
 
-        # Parameters are sent in query string for DELETE according to docs/TS
-        params: Dict[str, Any] = {"external_user_id": external_user_id}
-        if ignore_hook_errors:
-            params["ignoreHookErrors"] = str(ignore_hook_errors).lower()
+        path = f"deployed-triggers/{deployed_component_id}"
+        params = {"external_user_id": external_user_id}
+        payload: UpdateTriggerOpts = {}
+        if active is not None: payload["active"] = active
+        if name is not None: payload["name"] = name
 
-        headers = {"Accept": "application/json"}
-        access_token = await self._get_access_token()
-        headers["Authorization"] = f"Bearer {access_token}"
-        if self._environment:
-            headers["X-PD-Environment"] = self._environment
-
-        try:
-            async with self._session.delete(url, params=params, headers=headers) as response:
-                if response.status == 204:
-                    return # Success
-                else:
-                    try:
-                        error_data = await response.json()
-                        error_message = error_data.get('error', {}).get('message', str(error_data))
-                    except (aiohttp.ContentTypeError, ValueError):
-                        error_message = await response.text()
-                    raise PipedreamApiError(f"API request failed: {response.status} - {error_message}")
-        except aiohttp.ClientError as e:
-            raise PipedreamApiError(f"Network error during API request: {e}")
+        response_data = await self._connect_request(path, method="PUT", params=params, json_data=payload)
+        return GetDeployedTriggerResponse(data=cast(DeployedComponent, response_data))
 
     async def get_deployed_trigger_events(
         self,
         deployed_component_id: str,
         external_user_id: str,
-        limit: Optional[int] = None, # .mdx uses 'n', TS uses 'limit'. Assuming 'limit'.
+        limit: Optional[int] = None,
     ) -> GetDeployedTriggerEventsResponse:
-        """
-        Retrieves recent events emitted by a deployed trigger.
-
-        Args:
-            deployed_component_id: The ID of the deployed trigger.
-            external_user_id: The external user ID associated with the trigger.
-            limit: Optional maximum number of events to retrieve (default 10, max 100 in docs).
-
-        Returns:
-            A dictionary containing a list of emitted events under the 'data' key.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing.
-        """
+        """Retrieves recent events emitted by a deployed trigger."""
         if not all([deployed_component_id, external_user_id]):
             raise ValueError("deployed_component_id and external_user_id are required.")
-
-        path = f"connect/{self._project_id}/deployed-triggers/{deployed_component_id}/events"
-        params: Dict[str, Any] = {"external_user_id": external_user_id}
-        if limit is not None:
-            params["limit"] = limit # Using 'limit' based on TS GetTriggerEventsOpts
-
-        response_data = await self._request("GET", path, params=params)
-
-        if "data" not in response_data or not isinstance(response_data["data"], list):
-             raise PipedreamApiError(f"Unexpected response format for get_deployed_trigger_events: {response_data}")
-
-        return GetDeployedTriggerEventsResponse(data=response_data["data"])
+        path = f"deployed-triggers/{deployed_component_id}/events"
+        params = {
+            "external_user_id": external_user_id,
+             "n": limit
+        }
+        response_data = await self._connect_request(path, method="GET", params=params)
+        return cast(GetDeployedTriggerEventsResponse, response_data)
 
     async def get_deployed_trigger_webhooks(
         self,
         deployed_component_id: str,
         external_user_id: str,
     ) -> GetDeployedTriggerWebhooksResponse:
-        """
-        Retrieves the list of webhook URLs listening to a deployed trigger.
-
-        Args:
-            deployed_component_id: The ID of the deployed trigger.
-            external_user_id: The external user ID associated with the trigger.
-
-        Returns:
-            A dictionary containing a list of webhook URLs.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing.
-        """
+        """Retrieves webhook URLs listening to a deployed trigger."""
         if not all([deployed_component_id, external_user_id]):
             raise ValueError("deployed_component_id and external_user_id are required.")
-
-        path = f"connect/{self._project_id}/deployed-triggers/{deployed_component_id}/webhooks"
+        path = f"deployed-triggers/{deployed_component_id}/webhooks"
         params = {"external_user_id": external_user_id}
-
-        response_data = await self._request("GET", path, params=params)
-
-        if "webhook_urls" not in response_data or not isinstance(response_data["webhook_urls"], list):
-             raise PipedreamApiError(f"Unexpected response format for get_deployed_trigger_webhooks: {response_data}")
-
-        return GetDeployedTriggerWebhooksResponse(webhook_urls=response_data["webhook_urls"])
+        response_data = await self._connect_request(path, method="GET", params=params)
+        return cast(GetDeployedTriggerWebhooksResponse, response_data)
 
     async def update_deployed_trigger_webhooks(
         self,
@@ -1074,70 +747,31 @@ class PipedreamClient:
         external_user_id: str,
         webhook_urls: List[str],
     ) -> UpdateDeployedTriggerWebhooksResponse:
-        """
-        Updates the list of webhook URLs listening to a deployed trigger.
-
-        Args:
-            deployed_component_id: The ID of the deployed trigger.
-            external_user_id: The external user ID associated with the trigger.
-            webhook_urls: The new list of webhook URLs.
-
-        Returns:
-            A dictionary containing the confirmed list of webhook URLs.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing.
-        """
+        """Updates webhook URLs listening to a deployed trigger."""
         if not all([deployed_component_id, external_user_id]):
             raise ValueError("deployed_component_id and external_user_id are required.")
-        # webhook_urls can be an empty list
-
-        path = f"connect/{self._project_id}/deployed-triggers/{deployed_component_id}/webhooks"
-        # PUT request requires external_user_id in query params according to .mdx curl example
+        path = f"deployed-triggers/{deployed_component_id}/webhooks"
         params = {"external_user_id": external_user_id}
-        payload = {"webhook_urls": webhook_urls}
-
-        response_data = await self._request("PUT", path, params=params, json_data=payload)
-
-        if "webhook_urls" not in response_data or not isinstance(response_data["webhook_urls"], list):
+        payload = {"webhookUrls": webhook_urls}
+        response_data = await self._connect_request(path, method="PUT", params=params, json_data=payload)
+        if "webhook_urls" not in response_data:
              raise PipedreamApiError(f"Unexpected response format for update_deployed_trigger_webhooks: {response_data}")
-
-        return UpdateDeployedTriggerWebhooksResponse(webhook_urls=response_data["webhook_urls"])
+        return cast(UpdateDeployedTriggerWebhooksResponse, response_data)
 
     async def get_deployed_trigger_workflows(
         self,
         deployed_component_id: str,
         external_user_id: str,
     ) -> GetDeployedTriggerWorkflowsResponse:
-        """
-        Retrieves the list of workflow IDs listening to a deployed trigger.
-
-        Args:
-            deployed_component_id: The ID of the deployed trigger.
-            external_user_id: The external user ID associated with the trigger.
-
-        Returns:
-            A dictionary containing a list of workflow IDs.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing.
-        """
+        """Retrieves workflow IDs listening to a deployed trigger."""
         if not all([deployed_component_id, external_user_id]):
             raise ValueError("deployed_component_id and external_user_id are required.")
-
-        path = f"connect/{self._project_id}/deployed-triggers/{deployed_component_id}/workflows"
+        path = f"deployed-triggers/{deployed_component_id}/pipelines"
         params = {"external_user_id": external_user_id}
-
-        response_data = await self._request("GET", path, params=params)
-
-        if "workflow_ids" not in response_data or not isinstance(response_data["workflow_ids"], list):
-             raise PipedreamApiError(f"Unexpected response format for get_deployed_trigger_workflows: {response_data}")
-
-        return GetDeployedTriggerWorkflowsResponse(workflow_ids=response_data["workflow_ids"])
+        response_data = await self._connect_request(path, method="GET", params=params)
+        if "workflow_ids" not in response_data:
+              raise PipedreamApiError(f"Unexpected response format for get_deployed_trigger_workflows: {response_data}")
+        return cast(GetDeployedTriggerWorkflowsResponse, response_data)
 
     async def update_deployed_trigger_workflows(
         self,
@@ -1145,79 +779,101 @@ class PipedreamClient:
         external_user_id: str,
         workflow_ids: List[str],
     ) -> UpdateDeployedTriggerWorkflowsResponse:
-        """
-        Updates the list of workflow IDs listening to a deployed trigger.
-
-        Args:
-            deployed_component_id: The ID of the deployed trigger.
-            external_user_id: The external user ID associated with the trigger.
-            workflow_ids: The new list of workflow IDs.
-
-        Returns:
-            A dictionary containing the confirmed list of workflow IDs.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are missing.
-        """
+        """Updates workflow IDs listening to a deployed trigger."""
         if not all([deployed_component_id, external_user_id]):
             raise ValueError("deployed_component_id and external_user_id are required.")
-        # workflow_ids can be an empty list
-
-        path = f"connect/{self._project_id}/deployed-triggers/{deployed_component_id}/workflows"
-        # PUT request requires external_user_id in query params according to .mdx curl example
+        path = f"deployed-triggers/{deployed_component_id}/pipelines"
         params = {"external_user_id": external_user_id}
-        # TS uses workflowIds key, .mdx example uses workflow_ids. Use TS key for consistency?
-        # Let's stick to pythonic snake_case for payload keys where possible, matching .mdx
-        payload = {"workflow_ids": workflow_ids}
-
-        response_data = await self._request("PUT", path, params=params, json_data=payload)
-
-        if "workflow_ids" not in response_data or not isinstance(response_data["workflow_ids"], list):
+        payload = {"workflowIds": workflow_ids}
+        response_data = await self._connect_request(path, method="PUT", params=params, json_data=payload)
+        if "workflow_ids" not in response_data:
              raise PipedreamApiError(f"Unexpected response format for update_deployed_trigger_workflows: {response_data}")
-
-        return UpdateDeployedTriggerWorkflowsResponse(workflow_ids=response_data["workflow_ids"])
-
-    # --- Rate Limits --- #
+        return cast(UpdateDeployedTriggerWorkflowsResponse, response_data)
 
     async def create_rate_limit(
         self,
         window_size_seconds: int,
         requests_per_window: int,
     ) -> CreateRateLimitResponse:
-        """
-        Defines rate limits for users and retrieves a rate limit token.
-
-        Args:
-            window_size_seconds: The size of the time window in seconds.
-            requests_per_window: The number of requests allowed per window.
-
-        Returns:
-            A dictionary containing the rate limit token.
-
-        Raises:
-            PipedreamAuthError: If authentication fails.
-            PipedreamApiError: If the API request fails.
-            ValueError: If required arguments are invalid.
-        """
+        """Defines rate limits and retrieves a token. (Not found in provided TS SDK files)."""
         if not window_size_seconds or window_size_seconds <= 0:
             raise ValueError("window_size_seconds must be a positive integer.")
         if not requests_per_window or requests_per_window <= 0:
             raise ValueError("requests_per_window must be a positive integer.")
-
-        # Path based on docs: /v1/connect/rate_limits (no project_id in path)
-        # Assuming auth is still handled via Bearer token
         path = "connect/rate_limits"
-
         payload = {
             "window_size_seconds": window_size_seconds,
             "requests_per_window": requests_per_window,
         }
+        response_data = await self._request(path=path, method="POST", json_data=payload)
+        return cast(CreateRateLimitResponse, response_data)
 
-        response_data = await self._request("POST", path, json_data=payload)
+    def _build_workflow_url(self, url_or_endpoint_id: str) -> str:
+         """Builds a full workflow URL (Internal helper)."""
+         if not url_or_endpoint_id: raise ValueError("URL or endpoint ID required.")
+         inp = url_or_endpoint_id.strip().lower()
+         if "." in inp or inp.startswith("http"):
+             url = inp if inp.startswith("http") else f"https://{inp}"
+             parsed = urllib.parse.urlparse(url)
+             if not parsed.hostname or not parsed.hostname.endswith(self._workflow_domain):
+                 raise ValueError(f"Invalid workflow domain. Must end with {self._workflow_domain}")
+             return url
+         else:
+             if not inp.startswith("en") and not inp.startswith("eo"):
+                  raise ValueError("Invalid endpoint ID format.")
+             return f"https://{inp}.{self._workflow_domain}"
 
-        if "token" not in response_data or not isinstance(response_data["token"], str):
-            raise PipedreamApiError(f"Unexpected response format for create_rate_limit: {response_data}")
+    async def invoke_workflow(
+        self,
+        url_or_endpoint_id: str,
+        method: str = "POST",
+        headers: Optional[Dict[str, str]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        data: Optional[Any] = None,
+        auth_type: HTTPAuthType = "none",
+    ) -> Any:
+         """Invokes a workflow by its HTTP endpoint URL or ID."""
+         workflow_url = self._build_workflow_url(url_or_endpoint_id)
+         parsed_url = urllib.parse.urlparse(workflow_url)
+         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+         path = parsed_url.path
 
-        return CreateRateLimitResponse(token=response_data["token"])
+         req_headers = headers or {}
+         requires_auth = False
+         if auth_type == "oauth":
+              requires_auth = True
+
+         return await self._request(
+             method=method,
+             path=path,
+             headers=req_headers,
+             json_data=json_data,
+             data=data,
+             requires_auth=requires_auth,
+             base_url_override=base_url,
+             include_pd_headers=False
+         )
+
+    async def invoke_workflow_for_external_user(
+        self,
+        url_or_endpoint_id: str,
+        external_user_id: str,
+        method: str = "POST",
+        headers: Optional[Dict[str, str]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        data: Optional[Any] = None,
+    ) -> Any:
+        """Invokes a workflow for a specific external user."""
+        if not external_user_id: raise ValueError("external_user_id is required.")
+
+        req_headers = headers or {}
+        req_headers["X-PD-External-User-ID"] = external_user_id
+
+        return await self.invoke_workflow(
+             url_or_endpoint_id=url_or_endpoint_id,
+             method=method,
+             headers=req_headers,
+             json_data=json_data,
+             data=data,
+             auth_type="oauth"
+        )
